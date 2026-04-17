@@ -1,0 +1,662 @@
+diff --git a/src/components/Parallax/Parallax.tsx b/src/components/Parallax/Parallax.tsx
+index fd4daa1..cd841a4 100644
+--- a/src/components/Parallax/Parallax.tsx
++++ b/src/components/Parallax/Parallax.tsx
+@@ -4,8 +4,11 @@ import { useParallax } from '../../hooks/useParallax';
+ import { ParallaxProps } from './types';
+ 
+ export function Parallax(props: PropsWithChildren<ParallaxProps>) {
+-  const { parallaxProps, rest } = getIsolatedParallaxProps(props);
+-  const { ref } = useParallax<HTMLDivElement>(parallaxProps);
++  const { parallaxProps, keyframes, rest } = getIsolatedParallaxProps(props);
++  const { ref } = useParallax<HTMLDivElement>({
++    ...parallaxProps,
++    ...(keyframes ? { keyframes } : {}),
++  });
+   return (
+     <div ref={ref} {...rest}>
+       {props.children}
+diff --git a/src/components/Parallax/types.ts b/src/components/Parallax/types.ts
+index 3929d96..d2e11a3 100644
+--- a/src/components/Parallax/types.ts
++++ b/src/components/Parallax/types.ts
+@@ -1,5 +1,7 @@
+ import { ParallaxElementConfig } from 'parallax-controller';
++import { KeyframeConfig } from '../../types/keyframes';
+ 
+ export interface ParallaxProps
+   extends ParallaxElementConfig,
++    KeyframeConfig,
+     Omit<React.ComponentPropsWithoutRef<'div'>, 'onChange'> {}
+diff --git a/src/components/ParallaxBanner/components/ParallaxBannerLayer.tsx b/src/components/ParallaxBanner/components/ParallaxBannerLayer.tsx
+index 8e13738..2e60a7e 100644
+--- a/src/components/ParallaxBanner/components/ParallaxBannerLayer.tsx
++++ b/src/components/ParallaxBanner/components/ParallaxBannerLayer.tsx
+@@ -16,7 +16,7 @@ const absoluteStyle: CSSProperties = {
+ export const ParallaxBannerLayer = (
+   props: BannerLayer & { testId?: string }
+ ) => {
+-  const { parallaxProps, rest } = getIsolatedParallaxProps(props);
++  const { parallaxProps, keyframes, rest } = getIsolatedParallaxProps(props);
+   const {
+     children,
+     disabled,
+@@ -33,6 +33,7 @@ export const ParallaxBannerLayer = (
+     targetElement: props.targetElement,
+     shouldDisableScalingTranslations: true,
+     ...parallaxProps,
++    ...(keyframes ? { keyframes } : {}),
+   });
+ 
+   return (
+diff --git a/src/components/ParallaxBanner/helpers/getExpandedStyle.ts b/src/components/ParallaxBanner/helpers/getExpandedStyle.ts
+index 231cbda..9ec47a9 100644
+--- a/src/components/ParallaxBanner/helpers/getExpandedStyle.ts
++++ b/src/components/ParallaxBanner/helpers/getExpandedStyle.ts
+@@ -1,5 +1,6 @@
+ import { parseValueAndUnit } from 'parallax-controller';
+ import { BannerLayer } from '../types';
++import { getKeyframeMaxTranslateY } from '../../../helpers/resolveKeyframeStyles';
+ 
+ const FALLBACK_RECT = {
+   height: 0,
+@@ -11,6 +12,30 @@ type ExpandedStyle = {
+ };
+ 
+ export function getExpandedStyle(layer: BannerLayer): ExpandedStyle {
++  if (layer.keyframes && layer.keyframes.length > 0) {
++    const { maxPositive, maxNegative, unit } = getKeyframeMaxTranslateY(
++      layer.keyframes
++    );
++
++    if (unit === 'px') {
++      return {
++        top: `${maxPositive * -1}px`,
++        bottom: `${maxNegative * -1}px`,
++      };
++    }
++
++    if (unit === '%') {
++      const clientRect =
++        layer.targetElement?.getBoundingClientRect() ?? FALLBACK_RECT;
++      const top = clientRect.height * 0.01 * maxPositive * -1;
++      const bottom = clientRect.height * 0.01 * maxNegative * -1;
++      return {
++        top: `${top}px`,
++        bottom: `${bottom}px`,
++      };
++    }
++  }
++
+   if (Array.isArray(layer.translateY)) {
+     const translateYStart = parseValueAndUnit(layer.translateY[0]);
+     const translateYEnd = parseValueAndUnit(layer.translateY[1]);
+diff --git a/src/components/ParallaxBanner/types.ts b/src/components/ParallaxBanner/types.ts
+index 2f8b6c9..b048a52 100644
+--- a/src/components/ParallaxBanner/types.ts
++++ b/src/components/ParallaxBanner/types.ts
+@@ -1,8 +1,10 @@
+ import { ParallaxElementConfig } from 'parallax-controller';
+ import { HTMLAttributes } from 'react';
++import { KeyframeConfig } from '../../types/keyframes';
+ 
+ export interface BannerLayer
+   extends ParallaxElementConfig,
++    KeyframeConfig,
+     Omit<HTMLAttributes<{}>, 'onChange'> {
+   /**
+    * Indicate if the layer should be expanded with negative top/bottom margins so the edges will
+diff --git a/src/helpers/getIsolatedParallaxProps.ts b/src/helpers/getIsolatedParallaxProps.ts
+index 4554c3f..f94e3f9 100644
+--- a/src/helpers/getIsolatedParallaxProps.ts
++++ b/src/helpers/getIsolatedParallaxProps.ts
+@@ -1,16 +1,19 @@
+ import { ParallaxElementConfig } from 'parallax-controller';
+ import { removeUndefinedObjectKeys } from '../utils/removeUndefinedObjectKeys';
++import { ParallaxKeyframe } from '../types/keyframes';
+ 
+ export function getIsolatedParallaxProps(
+   props: any
+ ): {
+   parallaxProps: ParallaxElementConfig;
++  keyframes: ParallaxKeyframe[] | undefined;
+   rest: Record<string, any>;
+ } {
+   const {
+     disabled,
+     easing,
+     endScroll,
++    keyframes,
+     onChange,
+     onEnter,
+     onExit,
+@@ -64,6 +67,7 @@ export function getIsolatedParallaxProps(
+ 
+   return {
+     parallaxProps,
++    keyframes,
+     rest,
+   };
+ }
+diff --git a/src/helpers/resolveKeyframeStyles.ts b/src/helpers/resolveKeyframeStyles.ts
+new file mode 100644
+index 0000000..339446d
+--- /dev/null
++++ b/src/helpers/resolveKeyframeStyles.ts
+@@ -0,0 +1,306 @@
++import bezier from 'bezier-easing';
++import { parseValueAndUnit } from 'parallax-controller';
++import {
++  ParallaxKeyframe,
++  EffectName,
++  EffectBounds,
++  InterpolatedEffectValues,
++  EFFECT_NAMES,
++  TRANSFORM_EFFECT_NAMES,
++  EFFECT_DEFAULT_UNITS,
++  EFFECT_IDENTITY_VALUES,
++} from '../types/keyframes';
++interface ParsedStop {
++  progress: number;
++  easingFn?: (t: number) => number;
++  values: Map<EffectName, { value: number; unit: string }>;
++}
++const CONFLICT_PROPS: string[] = ['speed', ...EFFECT_NAMES];
++export function stripEffectProps(
++  props: Record<string, any>
++): Record<string, any> {
++  const cleaned: Record<string, any> = {};
++  for (const key of Object.keys(props)) {
++    if (!(EFFECT_NAMES as readonly string[]).includes(key) && key !== 'speed') {
++      cleaned[key] = props[key];
++    }
++  }
++  return cleaned;
++}
++function validateEasingTuple(easing: number[], stopIndex: number): void {
++  if (easing.length !== 4) {
++    throw new Error(
++      `Keyframe at index ${stopIndex} has an easing with ${easing.length} values; expected exactly 4.`
++    );
++  }
++  for (let i = 0; i < 4; i++) {
++    if (typeof easing[i] !== 'number' || !Number.isFinite(easing[i])) {
++      throw new Error(
++        `Keyframe at index ${stopIndex} has a non-finite easing value at position ${i}.`
++      );
++    }
++  }
++  if (easing[0] < 0 || easing[0] > 1) {
++    throw new Error(
++      `Keyframe at index ${stopIndex} has easing x1=${easing[0]} outside [0,1].`
++    );
++  }
++  if (easing[2] < 0 || easing[2] > 1) {
++    throw new Error(
++      `Keyframe at index ${stopIndex} has easing x2=${easing[2]} outside [0,1].`
++    );
++  }
++}
++function validateStopEffects(kf: ParallaxKeyframe, index: number): void {
++  if (typeof kf.progress !== 'number' || !Number.isFinite(kf.progress)) {
++    throw new Error(
++      `Keyframe at index ${index} has a non-finite progress value.`
++    );
++  }
++  if (kf.progress < 0 || kf.progress > 1) {
++    throw new Error(
++      `Keyframe at index ${index} has progress=${kf.progress} outside [0,1].`
++    );
++  }
++  for (const name of EFFECT_NAMES) {
++    const raw = kf[name];
++    if (raw === undefined) continue;
++    if (typeof raw === 'number' && !Number.isFinite(raw)) {
++      throw new Error(
++        `Keyframe at index ${index} has a non-finite value for ${name}.`
++      );
++    }
++  }
++}
++function checkUnitConsistency(keyframes: ParallaxKeyframe[]): void {
++  const effectUnits = new Map<EffectName, string>();
++  for (let i = 0; i < keyframes.length; i++) {
++    const kf = keyframes[i];
++    for (const name of EFFECT_NAMES) {
++      const raw = kf[name];
++      if (raw === undefined) continue;
++      const defaultUnit = EFFECT_DEFAULT_UNITS[name];
++      const parsed = parseValueAndUnit(raw, defaultUnit);
++      const existing = effectUnits.get(name);
++      if (existing !== undefined && existing !== parsed.unit) {
++        throw new Error(
++          `Keyframe at index ${i} uses unit '${parsed.unit}' for ${name}, but a previous stop used '${existing}'. Units must be consistent across stops.`
++        );
++      }
++      effectUnits.set(name, parsed.unit);
++    }
++  }
++}
++export function validateKeyframes(
++  keyframes: ParallaxKeyframe[],
++  props: Record<string, any>
++): void {
++  if (!keyframes || keyframes.length === 0) return;
++  for (const conflictProp of CONFLICT_PROPS) {
++    if (props[conflictProp] !== undefined) {
++      throw new Error(
++        `Cannot use keyframes with ${conflictProp}. Keyframes are mutually exclusive with individual effect props and speed.`
++      );
++    }
++  }
++  for (let i = 0; i < keyframes.length; i++) {
++    validateStopEffects(keyframes[i], i);
++    if (keyframes[i].easing && i > 0) {
++      validateEasingTuple(keyframes[i].easing as number[], i);
++    }
++  }
++  if (keyframes[0].easing) {
++    throw new Error(
++      'The first keyframe (progress=0) must not have an easing; easing applies to the preceding segment.'
++    );
++  }
++  if (keyframes[0].progress !== 0) {
++    throw new Error('Keyframes must include a stop at progress 0.');
++  }
++  if (keyframes[keyframes.length - 1].progress !== 1) {
++    throw new Error('Keyframes must include a stop at progress 1.');
++  }
++  for (let i = 1; i < keyframes.length; i++) {
++    if (keyframes[i].progress <= keyframes[i - 1].progress) {
++      throw new Error(
++        'Keyframes must be sorted by ascending progress values.'
++      );
++    }
++  }
++  checkUnitConsistency(keyframes);
++}
++function propagateEffects(stops: ParsedStop[]): void {
++  const lastKnown = new Map<EffectName, { value: number; unit: string }>();
++  const allEffects = new Set<EffectName>();
++  for (const stop of stops) {
++    for (const name of stop.values.keys()) {
++      allEffects.add(name);
++    }
++  }
++  for (const stop of stops) {
++    for (const name of allEffects) {
++      if (stop.values.has(name)) {
++        lastKnown.set(name, stop.values.get(name)!);
++      } else if (lastKnown.has(name)) {
++        stop.values.set(name, lastKnown.get(name)!);
++      }
++    }
++  }
++}
++function parseStops(keyframes: ParallaxKeyframe[]): ParsedStop[] {
++  const stops = keyframes.map((kf) => {
++    const values = new Map<EffectName, { value: number; unit: string }>();
++    for (const name of EFFECT_NAMES) {
++      const raw = kf[name];
++      if (raw === undefined) continue;
++      const defaultUnit = EFFECT_DEFAULT_UNITS[name];
++      const parsed = parseValueAndUnit(raw, defaultUnit);
++      values.set(name, { value: parsed.value, unit: parsed.unit });
++    }
++    let easingFn: ((t: number) => number) | undefined;
++    if (kf.easing) {
++      easingFn = bezier(kf.easing[0], kf.easing[1], kf.easing[2], kf.easing[3]);
++    }
++    return { progress: kf.progress, easingFn, values };
++  });
++  propagateEffects(stops);
++  return stops;
++}
++function findSegment(
++  stops: ParsedStop[],
++  progress: number
++): { start: ParsedStop; end: ParsedStop } {
++  if (progress <= 0) return { start: stops[0], end: stops[0] };
++  if (progress >= 1) {
++    const last = stops[stops.length - 1];
++    return { start: last, end: last };
++  }
++  for (let i = 1; i < stops.length; i++) {
++    if (progress <= stops[i].progress) {
++      return { start: stops[i - 1], end: stops[i] };
++    }
++  }
++  const last = stops[stops.length - 1];
++  return { start: last, end: last };
++}
++function interpolateValue(
++  startVal: number,
++  endVal: number,
++  localProgress: number
++): number {
++  return startVal + (endVal - startVal) * localProgress;
++}
++function clampProgress(progress: number): number {
++  if (progress < 0) return 0;
++  if (progress > 1) return 1;
++  return progress;
++}
++function computeLocalProgress(
++  start: ParsedStop,
++  end: ParsedStop,
++  progress: number
++): number {
++  const segmentWidth = end.progress - start.progress;
++  let local: number;
++  if (segmentWidth === 0) {
++    local = 0;
++  } else {
++    local = (progress - start.progress) / segmentWidth;
++  }
++  if (end.easingFn) {
++    local = end.easingFn(local);
++  }
++  return local;
++}
++export function interpolateEffectsAtProgress(
++  keyframes: ParallaxKeyframe[],
++  progress: number
++): InterpolatedEffectValues {
++  const clamped = clampProgress(progress);
++  const stops = parseStops(keyframes);
++  const { start, end } = findSegment(stops, clamped);
++  const local = computeLocalProgress(start, end, clamped);
++  const result: Record<string, number> = {};
++  for (const name of EFFECT_NAMES) {
++    const startParsed = start.values.get(name);
++    const endParsed = end.values.get(name);
++    if (!startParsed && !endParsed) {
++      result[name] = EFFECT_IDENTITY_VALUES[name];
++      continue;
++    }
++    const sv = startParsed ? startParsed.value : 0;
++    const ev = endParsed ? endParsed.value : 0;
++    result[name] = interpolateValue(sv, ev, local);
++  }
++  return result as unknown as InterpolatedEffectValues;
++}
++export function resolveKeyframeStyles(
++  keyframes: ParallaxKeyframe[],
++  progress: number
++): { transform: string; opacity: string } {
++  const clamped = clampProgress(progress);
++  const stops = parseStops(keyframes);
++  const { start, end } = findSegment(stops, clamped);
++  const local = computeLocalProgress(start, end, clamped);
++  let transformStr = '';
++  let opacityStr = '';
++  for (const name of TRANSFORM_EFFECT_NAMES) {
++    const startParsed = start.values.get(name);
++    const endParsed = end.values.get(name);
++    if (!startParsed && !endParsed) continue;
++    const sv = startParsed ? startParsed.value : 0;
++    const ev = endParsed ? endParsed.value : 0;
++    const unit = startParsed?.unit ?? endParsed?.unit ?? EFFECT_DEFAULT_UNITS[name];
++    const interpolated = interpolateValue(sv, ev, local);
++    if (transformStr) transformStr += ' ';
++    transformStr += `${name}(${interpolated}${unit})`;
++  }
++  const startOpacity = start.values.get('opacity');
++  const endOpacity = end.values.get('opacity');
++  if (startOpacity || endOpacity) {
++    const sv = startOpacity ? startOpacity.value : 0;
++    const ev = endOpacity ? endOpacity.value : 0;
++    const interpolated = interpolateValue(sv, ev, local);
++    opacityStr = `${interpolated}`;
++  }
++  return { transform: transformStr, opacity: opacityStr };
++}
++export function applyKeyframeStylesToElement(
++  el: HTMLElement,
++  keyframes: ParallaxKeyframe[],
++  progress: number
++): void {
++  const { transform, opacity } = resolveKeyframeStyles(keyframes, progress);
++  el.style.transform = transform;
++  el.style.opacity = opacity;
++}
++export function getKeyframeEffectBounds(
++  keyframes: ParallaxKeyframe[],
++  effectName: EffectName
++): EffectBounds {
++  let min = Infinity;
++  let max = -Infinity;
++  let unit = EFFECT_DEFAULT_UNITS[effectName];
++  for (const kf of keyframes) {
++    const raw = kf[effectName];
++    if (raw === undefined) continue;
++    const defaultUnit = EFFECT_DEFAULT_UNITS[effectName];
++    const parsed = parseValueAndUnit(raw, defaultUnit);
++    unit = parsed.unit;
++    if (parsed.value < min) min = parsed.value;
++    if (parsed.value > max) max = parsed.value;
++  }
++  if (min === Infinity) {
++    min = 0;
++    max = 0;
++  }
++  return { min, max, unit };
++}
++export function getKeyframeMaxTranslateY(
++  keyframes: ParallaxKeyframe[]
++): { maxPositive: number; maxNegative: number; unit: string } {
++  const bounds = getKeyframeEffectBounds(keyframes, 'translateY');
++  const maxPositive = bounds.max > 0 ? bounds.max : 0;
++  const maxNegative = bounds.min < 0 ? Math.abs(bounds.min) : 0;
++  return { maxPositive, maxNegative, unit: bounds.unit };
++}
+diff --git a/src/hooks/useParallax.ts b/src/hooks/useParallax.ts
+index 8af77ad..801a97e 100644
+--- a/src/hooks/useParallax.ts
++++ b/src/hooks/useParallax.ts
+@@ -1,26 +1,60 @@
+-import { CreateElementOptions, Element } from 'parallax-controller';
++import { CreateElementOptions, Element, ParallaxElementConfig } from 'parallax-controller';
+ import { useEffect, useRef, useState } from 'react';
+ import { useVerifyController } from '../components/Parallax/hooks';
+ import { ParallaxProps } from '../components/Parallax/types';
+ import { getIsolatedParallaxProps } from '../helpers/getIsolatedParallaxProps';
++import { ParallaxKeyframe } from '../types/keyframes';
++import {
++  validateKeyframes,
++  applyKeyframeStylesToElement,
++  stripEffectProps,
++} from '../helpers/resolveKeyframeStyles';
+ import { useParallaxController } from './useParallaxController';
+-
++function createKeyframeElementProps(
++  parallaxProps: ParallaxElementConfig,
++  keyframes: ParallaxKeyframe[],
++  elRef: HTMLElement | null,
++  includeOnChange: boolean
++): ParallaxElementConfig {
++  const userOnProgressChange = parallaxProps.onProgressChange;
++  const nonEffectProps = stripEffectProps(parallaxProps);
++  const props: ParallaxElementConfig = {
++    ...nonEffectProps,
++    disabled: true,
++    onProgressChange: (progress: number) => {
++      if (elRef) applyKeyframeStylesToElement(elRef, keyframes, progress);
++      if (userOnProgressChange) userOnProgressChange(progress);
++    },
++  };
++  if (includeOnChange && parallaxProps.onChange) {
++    props.onChange = parallaxProps.onChange;
++  }
++  return props;
++}
+ export function useParallax<T extends HTMLElement>(props: ParallaxProps) {
+   const controller = useParallaxController();
+   const ref = useRef<T>(null);
+-  const { parallaxProps } = getIsolatedParallaxProps(props);
+-
++  const { parallaxProps, keyframes } = getIsolatedParallaxProps(props);
+   useVerifyController(controller);
+-
++  if (keyframes && keyframes.length > 0) {
++    validateKeyframes(keyframes, parallaxProps);
++  }
+   const [element, setElement] = useState<Element>();
+-
+-  // create element
+   useEffect(() => {
+     let newElement: Element | undefined;
+     if (ref.current instanceof HTMLElement) {
++      let elementProps = parallaxProps;
++      if (keyframes && keyframes.length > 0) {
++        elementProps = createKeyframeElementProps(
++          parallaxProps,
++          keyframes,
++          ref.current,
++          true
++        );
++      }
+       const options: CreateElementOptions = {
+         el: ref.current,
+-        props: parallaxProps,
++        props: elementProps,
+       };
+       newElement = controller?.createElement(options);
+       setElement(newElement);
+@@ -29,18 +63,23 @@ export function useParallax<T extends HTMLElement>(props: ParallaxProps) {
+         'You must assign the ref returned by the useParallax() hook to an HTML Element.'
+       );
+     }
+-
+     return () => {
+       if (newElement) {
+         controller?.removeElementById(newElement.id);
+       }
+     };
+   }, []);
+-
+-  // update element
+   useEffect(() => {
+     if (element) {
+-      if (props.disabled) {
++      if (keyframes && keyframes.length > 0) {
++        const updatedProps = createKeyframeElementProps(
++          parallaxProps,
++          keyframes,
++          ref.current,
++          false
++        );
++        controller?.updateElementPropsById(element.id, updatedProps);
++      } else if (props.disabled) {
+         controller?.resetElementStyles(element);
+         controller?.updateElementPropsById(element.id, parallaxProps);
+       } else {
+@@ -51,6 +90,7 @@ export function useParallax<T extends HTMLElement>(props: ParallaxProps) {
+     props.disabled,
+     props.easing,
+     props.endScroll,
++    props.keyframes,
+     props.onChange,
+     props.onEnter,
+     props.onExit,
+@@ -73,6 +113,5 @@ export function useParallax<T extends HTMLElement>(props: ParallaxProps) {
+     props.translateX,
+     props.translateY,
+   ]);
+-
+   return { ref, controller, element };
+ }
+diff --git a/src/types/keyframes.ts b/src/types/keyframes.ts
+new file mode 100644
+index 0000000..bbf489b
+--- /dev/null
++++ b/src/types/keyframes.ts
+@@ -0,0 +1,88 @@
++import { EasingParams } from 'parallax-controller';
++export interface KeyframeEffectValues {
++  translateX?: number | string;
++  translateY?: number | string;
++  rotate?: number | string;
++  rotateX?: number | string;
++  rotateY?: number | string;
++  rotateZ?: number | string;
++  scale?: number;
++  scaleX?: number;
++  scaleY?: number;
++  scaleZ?: number;
++  opacity?: number;
++}
++export interface ParallaxKeyframe extends KeyframeEffectValues {
++  progress: number;
++  easing?: EasingParams;
++}
++export interface KeyframeConfig {
++  keyframes?: ParallaxKeyframe[];
++}
++export interface InterpolatedEffectValues {
++  translateX: number;
++  translateY: number;
++  rotate: number;
++  rotateX: number;
++  rotateY: number;
++  rotateZ: number;
++  scale: number;
++  scaleX: number;
++  scaleY: number;
++  scaleZ: number;
++  opacity: number;
++}
++export interface EffectBounds {
++  min: number;
++  max: number;
++  unit: string;
++}
++export const EFFECT_NAMES = [
++  'translateX',
++  'translateY',
++  'rotate',
++  'rotateX',
++  'rotateY',
++  'rotateZ',
++  'scale',
++  'scaleX',
++  'scaleY',
++  'scaleZ',
++  'opacity',
++] as const;
++export type EffectName = (typeof EFFECT_NAMES)[number];
++export const TRANSFORM_EFFECT_NAMES = EFFECT_NAMES.filter(
++  (n) => n !== 'opacity'
++);
++export const SCALE_EFFECT_NAMES: readonly EffectName[] = [
++  'scale',
++  'scaleX',
++  'scaleY',
++  'scaleZ',
++];
++export const EFFECT_DEFAULT_UNITS: Record<EffectName, string> = {
++  translateX: '%',
++  translateY: '%',
++  rotate: 'deg',
++  rotateX: 'deg',
++  rotateY: 'deg',
++  rotateZ: 'deg',
++  scale: '',
++  scaleX: '',
++  scaleY: '',
++  scaleZ: '',
++  opacity: '',
++};
++export const EFFECT_IDENTITY_VALUES: Record<EffectName, number> = {
++  translateX: 0,
++  translateY: 0,
++  rotate: 0,
++  rotateX: 0,
++  rotateY: 0,
++  rotateZ: 0,
++  scale: 1,
++  scaleX: 1,
++  scaleY: 1,
++  scaleZ: 1,
++  opacity: 1,
++};

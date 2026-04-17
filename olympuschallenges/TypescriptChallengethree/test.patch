@@ -1,0 +1,519 @@
+diff --git a/src/keyframes.test.tsx b/src/keyframes.test.tsx
+new file mode 100644
+index 0000000..126e8ac
+--- /dev/null
++++ b/src/keyframes.test.tsx
+@@ -0,0 +1,449 @@
++import React, { PropsWithChildren, useRef } from 'react';
++import { renderHook } from '@testing-library/react';
++import { ParallaxController, ScrollAxis } from 'parallax-controller';
++import bezier from 'bezier-easing';
++import { MockProvider } from './testUtils/MockProvider';
++import { useParallax } from './hooks/useParallax';
++import { getExpandedStyle } from './components/ParallaxBanner/helpers/getExpandedStyle';
++import {
++  validateKeyframes,
++  resolveKeyframeStyles,
++} from './helpers/resolveKeyframeStyles';
++
++const testDiv = document.createElement('div');
++
++vi.mock('react', async () => {
++  const actual = await vi.importActual<typeof React>('react');
++  return {
++    ...actual,
++    useRef: vi.fn(() => ({
++      current: testDiv,
++    })),
++  };
++});
++
++function parseTransform(
++  transform: string
++): Record<string, string> {
++  const result: Record<string, string> = {};
++  const re = /(\w+)\(([^)]+)\)/g;
++  let match: RegExpExecArray | null;
++  while ((match = re.exec(transform)) !== null) {
++    result[match[1]] = match[2];
++  }
++  return result;
++}
++
++function expectTransformComponent(
++  transform: string,
++  name: string,
++  expected: string
++) {
++  const parts = parseTransform(transform);
++  expect(parts).toHaveProperty(name);
++  expect(parts[name]).toBe(expected);
++}
++
++describe('scroll-progress keyframes', () => {
++  beforeAll(() => {
++    vi.spyOn(console, 'error').mockImplementation(() => {});
++  });
++
++  afterEach(() => {
++    vi.clearAllMocks();
++    testDiv.style.transform = '';
++    testDiv.style.opacity = '';
++    // @ts-expect-error
++    useRef.mockImplementation(
++      vi.fn(() => ({
++        current: testDiv,
++      }))
++    );
++  });
++
++  afterAll(() => {
++    vi.resetAllMocks();
++  });
++
++  function setup() {
++    const controller = ParallaxController.init({
++      scrollAxis: ScrollAxis.vertical,
++    });
++    const Wrapper = (props: PropsWithChildren<{}>) => (
++      <MockProvider controllerMock={controller}>{props.children}</MockProvider>
++    );
++    return { controller, Wrapper };
++  }
++
++  describe('interpolation via resolveKeyframeStyles', () => {
++    it('interpolates translateY linearly between three stops', () => {
++      const kf = [
++        { progress: 0, translateY: 0 },
++        { progress: 0.5, translateY: 100 },
++        { progress: 1, translateY: 50 },
++      ];
++      expectTransformComponent(resolveKeyframeStyles(kf, 0).transform, 'translateY', '0%');
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.25).transform, 'translateY', '50%');
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.5).transform, 'translateY', '100%');
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.75).transform, 'translateY', '75%');
++      expectTransformComponent(resolveKeyframeStyles(kf, 1).transform, 'translateY', '50%');
++    });
++
++    it('applies per-segment cubic bezier easing only to the specified segment', () => {
++      const easingParams: [number, number, number, number] = [0, 0, 0.58, 1];
++      const kf = [
++        { progress: 0, translateY: 0 },
++        { progress: 0.5, translateY: 100, easing: easingParams },
++        { progress: 1, translateY: 0 },
++      ];
++      const easingFn = bezier(...easingParams);
++      const easedLocal = easingFn(0.5);
++      const expectedEased = `${easedLocal * 100}%`;
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.25).transform, 'translateY', expectedEased);
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.75).transform, 'translateY', '50%');
++    });
++
++    it('interpolates multiple effects simultaneously at a midpoint', () => {
++      const kf = [
++        { progress: 0, translateX: 0, rotate: 0, opacity: 0 },
++        { progress: 1, translateX: 200, rotate: 360, opacity: 1 },
++      ];
++      const result = resolveKeyframeStyles(kf, 0.5);
++      expectTransformComponent(result.transform, 'translateX', '100%');
++      expectTransformComponent(result.transform, 'rotate', '180deg');
++      expect(result.opacity).toBe('0.5');
++    });
++
++    it('applies exact values at progress boundaries 0 and 1', () => {
++      const kf = [
++        { progress: 0, translateY: -30, opacity: 0.2 },
++        { progress: 0.5, translateY: 60, opacity: 0.6 },
++        { progress: 1, translateY: 45, opacity: 0.9 },
++      ];
++      const at0 = resolveKeyframeStyles(kf, 0);
++      expectTransformComponent(at0.transform, 'translateY', '-30%');
++      expect(at0.opacity).toBe('0.2');
++      const at1 = resolveKeyframeStyles(kf, 1);
++      expectTransformComponent(at1.transform, 'translateY', '45%');
++      expect(at1.opacity).toBe('0.9');
++    });
++
++    it('interpolates between four non-uniformly spaced stops', () => {
++      const kf = [
++        { progress: 0, translateY: 0 },
++        { progress: 0.2, translateY: 100 },
++        { progress: 0.7, translateY: -50 },
++        { progress: 1, translateY: 30 },
++      ];
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.1).transform, 'translateY', '50%');
++      const localProgress = (0.45 - 0.2) / (0.7 - 0.2);
++      const expectedValue = 100 + (-50 - 100) * localProgress;
++      expectTransformComponent(
++        resolveKeyframeStyles(kf, 0.45).transform,
++        'translateY',
++        `${expectedValue}%`
++      );
++    });
++
++    it('handles string effect values with explicit units', () => {
++      const kf = [
++        { progress: 0, translateY: '-30px' },
++        { progress: 1, translateY: '70px' },
++      ];
++      expectTransformComponent(resolveKeyframeStyles(kf, 0.5).transform, 'translateY', '20px');
++    });
++
++    it('interpolates scale and scaleX together with translate effects', () => {
++      const kf = [
++        { progress: 0, translateX: 0, scale: 1, scaleX: 1 },
++        { progress: 1, translateX: 100, scale: 2, scaleX: 0.5 },
++      ];
++      const result = resolveKeyframeStyles(kf, 0.5);
++      expectTransformComponent(result.transform, 'translateX', '50%');
++      expectTransformComponent(result.transform, 'scale', '1.5');
++      expectTransformComponent(result.transform, 'scaleX', '0.75');
++    });
++
++    it('carries forward effect values when a property is omitted at a middle stop', () => {
++      const kf = [
++        { progress: 0, translateY: 0, opacity: 0 },
++        { progress: 0.5, translateY: 100 },
++        { progress: 1, translateY: 50, opacity: 1 },
++      ];
++      const at50 = resolveKeyframeStyles(kf, 0.5);
++      expectTransformComponent(at50.transform, 'translateY', '100%');
++      expect(at50.opacity).toBe('0');
++      const at75 = resolveKeyframeStyles(kf, 0.75);
++      expect(at75.opacity).toBe('0.5');
++    });
++
++    it('carries forward translateX when only opacity changes at a stop', () => {
++      const kf = [
++        { progress: 0, translateX: 100, opacity: 0 },
++        { progress: 0.5, opacity: 1 },
++        { progress: 1, translateX: 200, opacity: 1 },
++      ];
++      const at25 = resolveKeyframeStyles(kf, 0.25);
++      expectTransformComponent(at25.transform, 'translateX', '100%');
++      expect(at25.opacity).toBe('0.5');
++      const at75 = resolveKeyframeStyles(kf, 0.75);
++      expectTransformComponent(at75.transform, 'translateX', '150%');
++      expect(at75.opacity).toBe('1');
++    });
++  });
++
++  describe('hook integration', () => {
++    it('applies keyframe styles to the element via the onProgressChange callback', () => {
++      const { controller, Wrapper } = setup();
++      renderHook(
++        () =>
++          useParallax({
++            keyframes: [
++              { progress: 0, translateY: 0, opacity: 0 },
++              { progress: 0.5, translateY: 100, opacity: 0.5 },
++              { progress: 1, translateY: 50, opacity: 1 },
++            ],
++          } as any),
++        { wrapper: Wrapper }
++      );
++      const elements = controller.getElements();
++      const element = elements[elements.length - 1];
++      element.props.onProgressChange!(0.25);
++      expectTransformComponent(testDiv.style.transform, 'translateY', '50%');
++      expect(testDiv.style.opacity).toBe('0.25');
++      element.props.onProgressChange!(0.5);
++      expectTransformComponent(testDiv.style.transform, 'translateY', '100%');
++      expect(testDiv.style.opacity).toBe('0.5');
++      element.props.onProgressChange!(1);
++      expectTransformComponent(testDiv.style.transform, 'translateY', '50%');
++      expect(testDiv.style.opacity).toBe('1');
++      controller.destroy();
++    });
++  });
++
++  describe('validation', () => {
++    it('throws when keyframes is used with speed', () => {
++      const { Wrapper } = setup();
++      expect(() => {
++        renderHook(
++          () =>
++            useParallax({
++              speed: 5,
++              keyframes: [
++                { progress: 0, translateY: 0 },
++                { progress: 1, translateY: 100 },
++              ],
++            } as any),
++          { wrapper: Wrapper }
++        );
++      }).toThrow();
++    });
++
++    it('throws when keyframes is used with individual effect props', () => {
++      const { Wrapper } = setup();
++      expect(() => {
++        renderHook(
++          () =>
++            useParallax({
++              translateY: [0, 100],
++              keyframes: [
++                { progress: 0, translateY: 0 },
++                { progress: 1, translateY: 100 },
++              ],
++            } as any),
++          { wrapper: Wrapper }
++        );
++      }).toThrow();
++    });
++
++    it('throws when keyframes are not sorted by ascending progress', () => {
++      const { Wrapper } = setup();
++      expect(() => {
++        renderHook(
++          () =>
++            useParallax({
++              keyframes: [
++                { progress: 0, translateY: 0 },
++                { progress: 0.8, translateY: 100 },
++                { progress: 0.5, translateY: 50 },
++                { progress: 1, translateY: 0 },
++              ],
++            } as any),
++          { wrapper: Wrapper }
++        );
++      }).toThrow();
++    });
++
++    it('throws when keyframes are missing a stop at progress 0', () => {
++      const { Wrapper } = setup();
++      expect(() => {
++        renderHook(
++          () =>
++            useParallax({
++              keyframes: [
++                { progress: 0.5, translateY: 50 },
++                { progress: 1, translateY: 100 },
++              ],
++            } as any),
++          { wrapper: Wrapper }
++        );
++      }).toThrow();
++    });
++
++    it('throws when keyframes are missing a stop at progress 1', () => {
++      const { Wrapper } = setup();
++      expect(() => {
++        renderHook(
++          () =>
++            useParallax({
++              keyframes: [
++                { progress: 0, translateY: 0 },
++                { progress: 0.5, translateY: 50 },
++              ],
++            } as any),
++          { wrapper: Wrapper }
++        );
++      }).toThrow();
++    });
++
++    it('throws when an intermediate stop has progress outside [0,1]', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0 },
++            { progress: 1.5, translateY: 100 },
++            { progress: 1, translateY: 50 },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when a stop has negative progress', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: -0.1, translateY: 0 },
++            { progress: 0, translateY: 0 },
++            { progress: 1, translateY: 50 },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when easing tuple has wrong number of values', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0 },
++            { progress: 1, translateY: 100, easing: [0.25, 0.1, 0.25] as any },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when easing x1 is outside [0,1]', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0 },
++            { progress: 1, translateY: 100, easing: [-0.5, 0, 0.58, 1] as any },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when easing x2 is outside [0,1]', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0 },
++            { progress: 1, translateY: 100, easing: [0, 0, 1.5, 1] as any },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when the first keyframe has an easing', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0, easing: [0, 0, 0.58, 1] as any },
++            { progress: 1, translateY: 100 },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when a stop has a non-finite effect value', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0 },
++            { progress: 1, translateY: Infinity },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when units are inconsistent across stops for the same effect', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: '10px' },
++            { progress: 1, translateY: '50%' },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++  });
++
++  describe('banner expanded style', () => {
++    it('computes expanded margins from max translateY across all keyframe stops in px', () => {
++      const result = getExpandedStyle({
++        keyframes: [
++          { progress: 0, translateY: '10px' },
++          { progress: 0.3, translateY: '-80px' },
++          { progress: 0.7, translateY: '120px' },
++          { progress: 1, translateY: '-40px' },
++        ],
++      } as any);
++
++      expect(result.top).toBe('-120px');
++      expect(result.bottom).toBe('-80px');
++    });
++
++    it('computes expanded margins from keyframe stops with percent translateY', () => {
++      const mockTarget = document.createElement('div');
++      Object.defineProperty(mockTarget, 'getBoundingClientRect', {
++        value: () => ({
++          height: 400,
++          width: 800,
++          top: 0,
++          left: 0,
++          right: 800,
++          bottom: 400,
++        }),
++      });
++
++      const result = getExpandedStyle({
++        keyframes: [
++          { progress: 0, translateY: 0 },
++          { progress: 0.5, translateY: 50 },
++          { progress: 1, translateY: -25 },
++        ],
++        targetElement: mockTarget,
++      } as any);
++
++      expect(result.top).toBe('-200px');
++      expect(result.bottom).toBe('-100px');
++    });
++  });
++});
+diff --git a/test.sh b/test.sh
+new file mode 100755
+index 0000000..354483b
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1,57 @@
++#!/usr/bin/env bash
++set -uo pipefail
++
++export NODE_ENV=test
++
++OUTPUT_PATH=""
++MODE=""
++
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --output_path)
++      OUTPUT_PATH="$2"
++      shift 2
++      ;;
++    base|new)
++      MODE="$1"
++      shift
++      ;;
++    *)
++      echo "Usage: $0 --output_path <path> [base|new]" >&2
++      exit 1
++      ;;
++  esac
++done
++
++if [[ -z "$MODE" ]]; then
++  echo "Usage: $0 --output_path <path> [base|new]" >&2
++  exit 1
++fi
++
++if [[ -z "$OUTPUT_PATH" ]]; then
++  echo "Usage: $0 --output_path <path> [base|new]" >&2
++  exit 1
++fi
++
++EXIT_CODE=0
++if [[ "$MODE" == "base" ]]; then
++  npx vitest run --reporter=junit --outputFile="$OUTPUT_PATH" src/components/Parallax/index.test.tsx src/components/ParallaxBanner/index.test.tsx src/components/ParallaxBanner/helpers/getExpandedStyle.test.ts src/components/ParallaxProvider/index.test.tsx src/hooks/useParallax.test.tsx src/hooks/useParallaxController.test.tsx
++  EXIT_CODE=$?
++elif [[ "$MODE" == "new" ]]; then
++  npx vitest run --reporter=junit --outputFile="$OUTPUT_PATH" src/keyframes.test.tsx
++  EXIT_CODE=$?
++fi
++
++if [ ! -f "$OUTPUT_PATH" ]; then
++  cat > "$OUTPUT_PATH" <<'EOF'
++<?xml version="1.0" encoding="UTF-8"?>
++<testsuites name="vitest" tests="0" failures="1" errors="1" time="0">
++  <testsuite name="keyframes" tests="0" failures="1" errors="1" time="0">
++    <testcase name="vitest-run-failed" classname="keyframes">
++      <failure message="Vitest failed to produce output">Vitest process failed to produce JUnit XML output</failure>
++    </testcase>
++  </testsuite>
++</testsuites>
++EOF
++fi
++
++exit "$EXIT_CODE"
