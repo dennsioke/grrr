@@ -458,7 +458,7 @@ new file mode 100755
 index 0000000..354483b
 --- /dev/null
 +++ b/test.sh
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,58 @@
 +#!/usr/bin/env bash
 +set -uo pipefail
 +
