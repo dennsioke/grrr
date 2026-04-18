@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..126e8ac
 --- /dev/null
 +++ b/src/keyframes.test.tsx
-@@ -0,0 +1,449 @@
+@@ -0,0 +1,476 @@
 +import React, { PropsWithChildren, useRef } from 'react';
 +import { renderHook } from '@testing-library/react';
 +import { ParallaxController, ScrollAxis } from 'parallax-controller';
@@ -225,6 +225,21 @@ index 0000000..126e8ac
 +      expect(testDiv.style.opacity).toBe('1');
 +      controller.destroy();
 +    });
++
++    it('does not inject onProgressChange when keyframes are not provided', () => {
++      const { controller, Wrapper } = setup();
++      renderHook(
++        () =>
++          useParallax({
++            translateY: [0, 100],
++          }),
++        { wrapper: Wrapper }
++      );
++      const elements = controller.getElements();
++      const element = elements[elements.length - 1];
++      expect(element.props.onProgressChange).toBeUndefined();
++      controller.destroy();
++    });
 +  });
 +
 +  describe('validation', () => {
@@ -368,6 +383,18 @@ index 0000000..126e8ac
 +          [
 +            { progress: 0, translateY: 0 },
 +            { progress: 1, translateY: 100, easing: [0, 0, 1.5, 1] as any },
++          ],
++          {}
++        );
++      }).toThrow();
++    });
++
++    it('throws when easing tuple contains non-finite values', () => {
++      expect(() => {
++        validateKeyframes(
++          [
++            { progress: 0, translateY: 0 },
++            { progress: 1, translateY: 100, easing: [0.25, NaN, 0.58, 1] as any },
 +          ],
 +          {}
 +        );
